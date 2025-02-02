@@ -1,25 +1,37 @@
 import RPi.GPIO as GPIO
 import time
+import signal
+import sys
 
-# Define the GPIO pin for the PIR sensor
-PIR_PIN = 26  # Change this if your sensor is connected to a different GPIO pin
+PIR_PIN = 26  # Your PIR sensor pin
 
-# Setup GPIO
-GPIO.setwarnings(False)  # Ignore warnings
-GPIO.setmode(GPIO.BCM)  # Use BCM GPIO numbering
-GPIO.setup(PIR_PIN, GPIO.IN)  # Set PIR pin as input
+# Cleanup GPIO before setting up
+GPIO.setwarnings(False)
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(PIR_PIN, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
 
-print("PIR Sensor Test. Waiting for motion...")
+
+def motion_detected(channel):
+    print("?? Motion detected!")
+
+# Function to cleanup GPIO when exiting
+def cleanup_gpio(signal, frame):
+    print("\nCleaning up GPIO and exiting...")
+    GPIO.cleanup()
+    sys.exit(0)
+
+# Register cleanup function for Ctrl+C (SIGINT)
+signal.signal(signal.SIGINT, cleanup_gpio)
 
 try:
-    while True:
-        if GPIO.input(PIR_PIN):  # Motion detected
-            print("🚨 Motion detected!")
-        else:  # No motion
-            print("No movement.")
-        
-        time.sleep(1)  # Delay to avoid flooding the console
+    GPIO.add_event_detect(PIR_PIN, GPIO.RISING, callback=motion_detected, bouncetime=300)
+    print("Waiting for motion... Press Ctrl+C to stop.")
 
-except KeyboardInterrupt:
-    print("\nExiting...")
-    GPIO.cleanup()  # Reset GPIO settings
+    while True:
+        time.sleep(1)  # Keeps script running
+
+except RuntimeError as e:
+    print(f"? GPIO Error: {e}")
+
+finally:
+    cleanup_gpio(None, None)  # Ensures cleanup on exit
