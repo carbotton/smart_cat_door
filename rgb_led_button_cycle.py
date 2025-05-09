@@ -1,23 +1,17 @@
-from gpiozero import LED, Button
+from gpiozero import Button
+import subprocess
 from signal import pause
 
-led = LED(17)
-# pull_up=True means the pin is HIGH by default, goes LOW when pressed
-button = Button(18, pull_up=True)
+# Set up the button
+button = Button(18, pull_up=True, bounce_time=0.2)
 
-state = False
+# Function to shutdown the system
+def shutdown_system():
+    print("Shutting down...")
+    subprocess.run(['sudo', 'shutdown', 'now'])
 
-def toggle_led():
-    global state
-    state = not state
-    if state:
-        led.on()
-        print("LED ON")
-    else:
-        led.off()
-        print("LED OFF")
+# Set up the button press action
+button.when_pressed = shutdown_system
 
-button.when_pressed = toggle_led
-
-print("Press the button to toggle the LED.")
-pause()
+print("Press the button to shut down the system.")
+pause()  # Wait for the button press
