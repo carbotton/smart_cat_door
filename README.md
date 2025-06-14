@@ -1,5 +1,6 @@
 # smart_cat_door
 
+```mermaid
 flowchart TD
         A(["Start"])
         A --> B{"Check override switch"}
@@ -15,3 +16,4 @@ flowchart TD
         F --> I["Wait 5 minutes"]
         H --> B
         I --> B
+´´´
