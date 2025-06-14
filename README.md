@@ -1,7 +1,7 @@
 # smart_cat_door
 
 ```mermaid
-flowchart TD
+graph TD
         A(["Start"])
         A --> B{"Check override switch"}
         B --Enabled--> C["Door opened"]
@@ -17,3 +17,4 @@ flowchart TD
         H --> B
         I --> B
 ```
+

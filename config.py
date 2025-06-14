@@ -1,0 +1,2 @@
+# GPIO PINS
+RELAY_PIN = 17
