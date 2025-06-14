@@ -7,12 +7,22 @@ from logger import logger as log
 #from override import let_in_flag
 
 import time
+import subprocess
 
 let_in_flag = False
 has_prey = False
 
+def start_vision_modules():
+    try:
+        subprocess.Popen(["/bin/bash", "../../Cat_Prey_Analyzer/catCam_starter.sh"])
+        log.info("Vision modules started successfully.")
+    except Exception as e:
+        log.exception(f"Error starting vision modules: {e}")
+
 def main():
     log.info("Smart Cat Door system started.")
+    
+    start_vision_modules()
     last_state = None
 
     try:
