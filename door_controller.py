@@ -7,8 +7,10 @@ LOCKED = GPIO.LOW
 UNLOCKED = GPIO.HIGH
 
 # Setup GPIO once
+GPIO.setwarnings(False)
 GPIO.setmode(GPIO.BCM)
-GPIO.setup(RELAY_PIN, GPIO.OUT)
+GPIO.setup(RELAY_PIN, GPIO.OUT, initial=LOCKED)
+
 
 def lock_door():
     """
@@ -27,3 +29,4 @@ def door_cleanup():
     Call this once on shutdown
     """
     GPIO.cleanup()
+
