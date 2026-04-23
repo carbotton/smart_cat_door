@@ -21,7 +21,7 @@ OVERRIDE_DEFAULT_FORCE_OPEN = False
 # Examples:
 #   CAMERA_SOURCE = 0
 #   CAMERA_SOURCE = "rtsp://user:pass@ip/stream"
-CAMERA_SOURCE = "rtsp://169.254.1.1:554/live/0/MAIN"
+CAMERA_SOURCE = 0  # laptop webcam
 
 # If using RTSP, sometimes OpenCV needs a smaller buffer to reduce latency
 CAP_PROP_BUFFERSIZE = 1
@@ -45,4 +45,4 @@ MODELS_DIR = Path(__file__).resolve().parent / "models"
 # TF Object Detection frozen graph (COCO SSD MobileNetV2).
 # Find it with:
 #   find ~ -name frozen_inference_graph.pb | grep ssdlite_mobilenet_v2_coco_2018_05_09
-TFOD_FROZEN_GRAPH = Path("/home/carbotton/models/research/object_detection/ssdlite_mobilenet_v2_coco_2018_05_09/frozen_inference_graph.pb")
+TFOD_FROZEN_GRAPH = Path.home() / "models/research/object_detection/ssdlite_mobilenet_v2_coco_2018_05_09/frozen_inference_graph.pb"

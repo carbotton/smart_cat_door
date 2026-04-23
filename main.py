@@ -19,11 +19,7 @@ from config import (
 )
 from door_controller import lock_door, unlock_door, door_cleanup
 
-import os
-os.environ.setdefault("GPIOZERO_PIN_FACTORY", "lgpio")
-
-
-import override  # reads hardware button state
+import override  # reads hardware button state (falls back gracefully when no GPIO)
 override_btn = override.init_override_button(27)
 
 from vision.cat_finder_tfod import CatFinderTFOD
@@ -223,7 +219,7 @@ def run_vision_forever(stop_event: threading.Event):
 def main():
     logger.info("Smart Cat Door system started.")
     
-    setup_ethernet_link_local()
+    # setup_ethernet_link_local()  # Pi only
 
     with _state_lock:
         _apply_lock("startup_default_locked")
