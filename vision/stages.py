@@ -6,6 +6,7 @@ import time
 import cv2
 import numpy as np
 import tensorflow as tf
+import tf_keras
 
 
 class PreyClassifier:
@@ -13,7 +14,7 @@ class PreyClassifier:
 
     def __init__(self, model_path: Path):
         def get_f1(y_true, y_pred):
-            K = tf.keras.backend
+            K = tf_keras.backend
             tp = K.sum(K.round(K.clip(y_true * y_pred, 0, 1)))
             pp = K.sum(K.round(K.clip(y_pred, 0, 1)))
             ppos = K.sum(K.round(K.clip(y_true, 0, 1)))
@@ -22,7 +23,7 @@ class PreyClassifier:
             return 2 * (precision * recall) / (precision + recall + K.epsilon())
 
         custom = {"get_f1": get_f1} if "F1" in model_path.name else None
-        self.model = tf.keras.models.load_model(str(model_path), custom_objects=custom)
+        self.model = tf_keras.models.load_model(str(model_path), custom_objects=custom)
 
     def predict(self, snout_bgr: np.ndarray) -> tuple[bool, float, float]:
         img = cv2.resize(snout_bgr, (self.TARGET, self.TARGET)) * (1.0 / 255.0)
@@ -37,7 +38,7 @@ class FaceFurClassifier:
     TARGET = 224
 
     def __init__(self, model_path: Path):
-        self.model = tf.keras.models.load_model(str(model_path))
+        self.model = tf_keras.models.load_model(str(model_path))
 
     def face_bool(self, snout_bgr: np.ndarray) -> tuple[bool, float, float]:
         img = cv2.resize(snout_bgr, (self.TARGET, self.TARGET)) * (1.0 / 255.0)
@@ -72,7 +73,7 @@ class EyeDetector:
     TARGET = 224
 
     def __init__(self, model_path: Path):
-        self.model = tf.keras.models.load_model(str(model_path))
+        self.model = tf_keras.models.load_model(str(model_path))
 
     def _letterbox(self, img: np.ndarray):
         old_h, old_w = img.shape[:2]
