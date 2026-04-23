@@ -60,12 +60,28 @@ models/
 - Override button toggles force-open; override wins over all vision decisions
 - Timer thread enforces lock expiry even when no new frames arrive
 
-## External dependency
+## TF-OD frozen graph
 
-The TF-OD frozen graph is **not bundled** in the repo. Its path is set in `config.py`:
+**TF-OD** = TensorFlow Object Detection API. The frozen graph is the first stage of the vision pipeline — it answers "is there a cat in this frame, and where?"
+
+- **Frozen graph (`.pb`)** — a TF1 format where model weights and architecture are baked into one binary file, inference-only. The code loads it via `tf.compat.v1.Session` (TF2's backward-compat layer).
+- **COCO SSD MobileNetV2** — the specific model: trained on the 80-class COCO dataset (includes cats/dogs), SSD = Single Shot Detector architecture, MobileNetV2 = lightweight backbone suited for embedded hardware like the Pi.
+- Only COCO classes 17 (cat) and 18 (dog) are acted on; everything else is ignored.
+
+The frozen graph is **not bundled** in the repo (too large). Download it once:
+
+```bash
+mkdir -p /home/carbotton/models/research/object_detection
+cd /home/carbotton/models/research/object_detection
+wget http://download.tensorflow.org/models/object_detection/ssdlite_mobilenet_v2_coco_2018_05_09.tar.gz
+tar -xzf ssdlite_mobilenet_v2_coco_2018_05_09.tar.gz
+```
+
+The path is configured in `config.py`:
 ```python
 TFOD_FROZEN_GRAPH = Path("/home/carbotton/models/research/object_detection/ssdlite_mobilenet_v2_coco_2018_05_09/frozen_inference_graph.pb")
 ```
+
 All Keras `.h5` models and Haar XMLs are in `models/` and are bundled.
 
 ## Test scripts (`test/`)
