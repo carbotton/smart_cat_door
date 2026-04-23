@@ -15,6 +15,11 @@ CLEAN_CONFIRMATIONS = 2              # no_prey must be confirmed twice (same eve
 OVERRIDE_DEFAULT_FORCE_OPEN = False
 
 # =========================
+# Debug
+# =========================
+SHOW_PREVIEW = True   # open a live camera window (disable on Pi / headless)
+
+# =========================
 # Vision inputs
 # =========================
 # Use an RTSP/IP camera URL, or set to 0 for the Pi camera via V4L2 (if available)

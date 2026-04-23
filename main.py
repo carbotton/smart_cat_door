@@ -16,6 +16,7 @@ from config import (
     EVENT_END_MISSES,
     MODELS_DIR,
     TFOD_FROZEN_GRAPH,
+    SHOW_PREVIEW,
 )
 from door_controller import lock_door, unlock_door, door_cleanup
 
@@ -158,12 +159,20 @@ def _open_capture(source: Union[int, str]):
     return cap
 
 
+def _draw_preview(frame, det_box, face_box, label):
+    display = frame.copy()
+    if det_box is not None:
+        (x1, y1), (x2, y2) = det_box
+        cv2.rectangle(display, (x1, y1), (x2, y2), (0, 255, 0), 2)       # green = cat
+    if face_box is not None:
+        (fx1, fy1), (fx2, fy2) = face_box
+        cv2.rectangle(display, (fx1, fy1), (fx2, fy2), (255, 140, 0), 2)  # orange = snout
+    cv2.putText(display, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+    cv2.imshow("Smart Cat Door - Debug", display)
+    cv2.waitKey(1)
+
+
 def run_vision_forever(stop_event: threading.Event):
-    """
-    Runs vision loop. No fork imports. Uses:
-      - TF-OD cat/dog detector (frozen graph)
-      - Haar + Eye + Face/Fur + Prey classifiers
-    """
     cat_finder = CatFinderTFOD(TFOD_FROZEN_GRAPH)
     pipeline = VisionPipeline(MODELS_DIR)
 
@@ -176,6 +185,10 @@ def run_vision_forever(stop_event: threading.Event):
     miss_streak = 0
     in_event = False
 
+    last_det_box = None
+    last_face_box = None
+    last_label = "waiting..."
+
     while not stop_event.is_set():
         ok, frame = cap.read()
         if not ok or frame is None:
@@ -184,6 +197,10 @@ def run_vision_forever(stop_event: threading.Event):
             continue
 
         frame_idx += 1
+
+        if SHOW_PREVIEW:
+            _draw_preview(frame, last_det_box, last_face_box, last_label)
+
         if frame_idx % VISION_EVERY_N_FRAMES != 0:
             continue
 
@@ -191,20 +208,34 @@ def run_vision_forever(stop_event: threading.Event):
 
         if not det.found or det.box is None:
             miss_streak += 1
+            if miss_streak % 10 == 1:
+                logger.info(f"Frame {frame_idx}: no cat (miss streak {miss_streak})")
+            last_det_box = None
+            last_face_box = None
+            last_label = "no cat"
             if in_event and miss_streak >= EVENT_END_MISSES:
                 in_event = False
-            # No cat: only emit dk when an event is active (otherwise keep quiet)
             if in_event:
                 door_decision_cb("dk", score=None, event_nr=event_nr)
             continue
 
         # Cat found
+        (x1, y1), (x2, y2) = det.box
+        logger.info(f"Frame {frame_idx}: cat score={det.score:.2f} box=[{x1},{y1},{x2},{y2}]")
+        last_det_box = det.box
+
         miss_streak = 0
         if not in_event:
             event_nr += 1
             in_event = True
 
         res = pipeline.analyze(frame, det.box, det.score)
+        last_face_box = res.face_box
+
+        prey_str = {True: "PREY", False: "clean", None: "dk"}.get(res.prey, "?")
+        conf_str = f" conf={res.prey_conf:.2f}" if res.prey_conf is not None else ""
+        logger.info(f"  face={res.face} prey={prey_str}{conf_str}")
+        last_label = f"cat {det.score:.2f} | {prey_str}{conf_str}"
 
         if res.prey is True:
             door_decision_cb("prey", score=res.prey_conf, event_nr=event_nr)
@@ -214,6 +245,8 @@ def run_vision_forever(stop_event: threading.Event):
             door_decision_cb("dk", score=None, event_nr=event_nr)
 
     cap.release()
+    if SHOW_PREVIEW:
+        cv2.destroyAllWindows()
 
 
 def main():
