@@ -1,3 +1,4 @@
+import os
 import threading
 import time
 from datetime import datetime
@@ -5,6 +6,8 @@ from typing import Optional, Union
 import subprocess
 import logging
 import cv2
+
+os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "loglevel;quiet")
 
 from logger import logger
 from config import (
