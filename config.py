@@ -9,7 +9,7 @@ RELAY_PIN = 17  # BCM numbering
 # Door policy
 # =========================
 LOCK_DURATION_SECONDS = 15 * 60      # prey -> lock for 15 minutes
-CLEAN_CONFIRMATIONS = 2              # no_prey must be confirmed twice (same event)
+CLEAN_CONFIRMATIONS = 1              # cummuli accumulator already confirms across frames
 
 # If True, door will be forced open at startup until you toggle it off
 OVERRIDE_DEFAULT_FORCE_OPEN = False
@@ -40,6 +40,18 @@ EVENT_END_MISSES = 3
 # Resolution
 CAPTURE_WIDTH = 640
 CAPTURE_HEIGHT = 360
+
+# =========================
+# Cummuli accumulator  (original Cat_Prey_Analyzer cascade.py)
+# =========================
+# Each face frame contributes:  50 - round(prey_conf * 100)
+#   prey_conf=0.0  → +50 (strong no-prey evidence)
+#   prey_conf=0.5  →   0 (neutral)
+#   prey_conf=1.0  → -50 (strong prey evidence)
+# Decision is made on the *average* contribution across face frames.
+CUMULUS_NO_PREY_THRESHOLD =  2.9603   # avg > this → cat is clean → unlock
+CUMULUS_PREY_THRESHOLD    = -10.0     # avg < this → prey confirmed → lock
+CUMULUS_PATIENCE          =  2        # min face frames before any decision
 
 # =========================
 # Classifier thresholds

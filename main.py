@@ -20,6 +20,9 @@ from config import (
     MODELS_DIR,
     TFOD_FROZEN_GRAPH,
     SHOW_PREVIEW,
+    CUMULUS_NO_PREY_THRESHOLD,
+    CUMULUS_PREY_THRESHOLD,
+    CUMULUS_PATIENCE,
 )
 from door_controller import lock_door, unlock_door, door_cleanup
 
@@ -28,6 +31,58 @@ override_btn = override.init_override_button(27)
 
 from vision.cat_finder_tfod import CatFinderTFOD
 from vision.pipeline import VisionPipeline
+
+
+# ── Cummuli accumulator ─────────────────────────────────────────────────────
+
+class CumulusAccumulator:
+    """
+    Per-event accumulator matching the original Cat_Prey_Analyzer cummuli system.
+
+    Each face frame contributes:  50 - round(prey_conf * 100)
+      conf=0.0 → +50 (strong no-prey),  conf=0.5 → 0,  conf=1.0 → -50 (strong prey)
+
+    A decision is only made once face_count >= CUMULUS_PATIENCE:
+      avg > NO_PREY_THRESHOLD  →  no_prey
+      avg < PREY_THRESHOLD     →  prey
+      otherwise                →  dk (still accumulating)
+
+    After a prey/no_prey decision the caller should call reset() so the next
+    cycle starts fresh within the same event.
+    """
+
+    def __init__(self):
+        self.points: int = 0
+        self.face_count: int = 0
+
+    def reset(self):
+        self.points = 0
+        self.face_count = 0
+
+    def update(self, prey_conf: float) -> int:
+        """Record one face frame. Returns this frame's contribution (+/-)."""
+        contribution = 50 - int(round(100 * prey_conf))
+        self.points += contribution
+        self.face_count += 1
+        return contribution
+
+    @property
+    def avg(self) -> float:
+        return self.points / self.face_count if self.face_count > 0 else 0.0
+
+    def decide(self) -> str:
+        """Returns 'prey', 'no_prey', or 'dk'."""
+        if self.face_count < CUMULUS_PATIENCE:
+            return "dk"
+        a = self.avg
+        if a > CUMULUS_NO_PREY_THRESHOLD:
+            return "no_prey"
+        if a < CUMULUS_PREY_THRESHOLD:
+            return "prey"
+        return "dk"
+
+    def status_str(self) -> str:
+        return f"cum avg={self.avg:+.2f} ({self.face_count} faces)"
 
 
 # ── Door state machine ──────────────────────────────────────────────────────
@@ -48,14 +103,8 @@ def setup_ethernet_link_local(
 ):
     logging.info("Setting up IP address for Ethernet...")
     try:
-        subprocess.run(
-            ["sudo", "ip", "addr", "replace", ip_addr, "dev", iface],
-            check=True,
-        )
-        subprocess.run(
-            ["sudo", "ip", "link", "set", iface, "up"],
-            check=True,
-        )
+        subprocess.run(["sudo", "ip", "addr", "replace", ip_addr, "dev", iface], check=True)
+        subprocess.run(["sudo", "ip", "link", "set", iface, "up"], check=True)
         logging.info(f"Ethernet {iface} configured with {ip_addr}")
     except subprocess.CalledProcessError as e:
         logging.error(f"Failed to configure Ethernet {iface}: {e}")
@@ -123,7 +172,6 @@ def timer_tick_forever(stop_event: threading.Event):
     while not stop_event.is_set():
         with _state_lock:
             override_force_open = bool(getattr(override, "let_in_flag", False)) or OVERRIDE_DEFAULT_FORCE_OPEN
-
             if override_force_open:
                 if door_locked:
                     _apply_unlock("override_force_open_tick")
@@ -169,22 +217,24 @@ def _draw_preview(frame, det_box, face_box, label, window_title="Smart Cat Door"
 
 def run_vision_forever(stop_event: threading.Event, show_preview: bool):
     cat_finder = CatFinderTFOD(TFOD_FROZEN_GRAPH)
-    pipeline = VisionPipeline(MODELS_DIR)
+    pipeline   = VisionPipeline(MODELS_DIR)
 
     cap = _open_capture(CAMERA_SOURCE)
     if not cap.isOpened():
         raise RuntimeError(f"Unable to open camera source: {CAMERA_SOURCE}")
 
     logger.info(f"Camera opened: {CAMERA_SOURCE}")
+    logger.info(f"Cummuli thresholds — no_prey: >{CUMULUS_NO_PREY_THRESHOLD:.2f}  prey: <{CUMULUS_PREY_THRESHOLD:.1f}  patience: {CUMULUS_PATIENCE} faces")
 
-    frame_idx = 0
-    event_nr = 0
+    frame_idx   = 0
+    event_nr    = 0
     miss_streak = 0
-    in_event = False
+    in_event    = False
+    cum         = CumulusAccumulator()
 
-    last_det_box = None
+    last_det_box  = None
     last_face_box = None
-    last_label = "waiting..."
+    last_label    = "waiting..."
 
     while not stop_event.is_set():
         ok, frame = cap.read()
@@ -208,12 +258,13 @@ def run_vision_forever(stop_event: threading.Event, show_preview: bool):
             if miss_streak == 1 and in_event:
                 logger.info(f"  Frame {frame_idx}: cat lost (miss streak starting)")
             elif miss_streak % 30 == 0:
-                logger.info(f"  Frame {frame_idx}: no cat detected (miss streak {miss_streak})")
-            last_det_box = None
+                logger.info(f"  Frame {frame_idx}: no cat (miss streak {miss_streak})")
+            last_det_box  = None
             last_face_box = None
-            last_label = "no cat"
+            last_label    = "no cat"
             if in_event and miss_streak >= EVENT_END_MISSES:
-                logger.info(f"  Event #{event_nr} ended after {miss_streak} consecutive misses.")
+                logger.info(f"  Event #{event_nr} ended — {cum.status_str()} — no threshold reached")
+                cum.reset()
                 in_event = False
             if in_event:
                 door_decision_cb("dk", score=None, event_nr=event_nr)
@@ -221,17 +272,19 @@ def run_vision_forever(stop_event: threading.Event, show_preview: bool):
 
         # Cat found
         (x1, y1), (x2, y2) = det.box
-        miss_streak = 0
-        last_det_box = det.box
+        miss_streak   = 0
+        last_det_box  = det.box
 
         if not in_event:
             event_nr += 1
-            in_event = True
+            in_event  = True
+            cum.reset()
             logger.info(f">>> EVENT #{event_nr} START — cat detected")
 
         res = pipeline.analyze(frame, det.box, det.score)
         last_face_box = res.face_box
 
+        # Per-frame strings
         prey_str  = {True: "PREY", False: "no_prey", None: "dk"}.get(res.prey, "?")
         conf_str  = f" conf={res.prey_conf:.2f}" if res.prey_conf is not None else ""
         face_str  = f"face={res.face_method or 'no'}"
@@ -239,20 +292,32 @@ def run_vision_forever(stop_event: threading.Event, show_preview: bool):
                      if res.ff_score is not None else " ff=n/a")
         infer_str = f" tfod={det.inference_s*1000:.0f}ms"
 
+        # Update accumulator if this frame yielded a usable prey score
+        if res.ff_confirmed and res.prey_conf is not None:
+            contrib  = cum.update(res.prey_conf)
+            cum_str  = f" | cum={contrib:+d} avg={cum.avg:+.2f} ({cum.face_count}f)"
+        else:
+            cum_str  = f" | cum=-- avg={cum.avg:+.2f} ({cum.face_count}f)" if cum.face_count else " | cum=--"
+
         logger.info(
             f"  Frame {frame_idx:5d} | cat={det.score:.2f} [{x1},{y1},{x2},{y2}]"
-            f" | {face_str}{ff_str} | pred={prey_str}{conf_str}{infer_str}"
+            f" | {face_str}{ff_str} | pred={prey_str}{conf_str}{infer_str}{cum_str}"
         )
 
-        last_label = f"event#{event_nr} {det.score:.2f} | {prey_str}{conf_str}"
+        last_label = f"event#{event_nr} | {prey_str}{conf_str} | {cum.status_str()}"
 
-        if res.prey is True:
-            logger.info(f"  >>> PREY DETECTED — triggering door lock")
-            door_decision_cb("prey", score=res.prey_conf, event_nr=event_nr)
-        elif res.prey is False:
-            door_decision_cb("no_prey", score=res.prey_conf, event_nr=event_nr)
+        # Cummuli decision
+        decision = cum.decide()
+        if decision == "no_prey":
+            logger.info(f"  >>> CUMULUS → NO PREY  ({cum.status_str()}) — unlocking")
+            door_decision_cb("no_prey", score=cum.avg, event_nr=event_nr)
+            cum.reset()
+        elif decision == "prey":
+            logger.info(f"  >>> CUMULUS → PREY  ({cum.status_str()}) — locking")
+            door_decision_cb("prey", score=cum.avg, event_nr=event_nr)
+            cum.reset()
         else:
-            door_decision_cb("dk", score=None, event_nr=event_nr)
+            door_decision_cb("dk", score=cum.avg if cum.face_count else None, event_nr=event_nr)
 
     cap.release()
     if show_preview:
@@ -267,8 +332,10 @@ def run_test_videos(videos_dir: Path, show_preview: bool):
       <videos_dir>/with_prey/   (ground truth = prey)
       <videos_dir>/no_prey/     (ground truth = no_prey)
 
-    Logs each detection with ground truth vs prediction, then prints
-    per-video and overall accuracy summaries.  Does NOT operate the door.
+    Logs per-frame detail with running cummuli state, then logs a decision at
+    the end of each event (when a threshold is crossed or the cat disappears).
+    Prints per-video and overall event-level accuracy summaries.
+    Does NOT operate the door.
     """
     cat_finder = CatFinderTFOD(TFOD_FROZEN_GRAPH)
     pipeline   = VisionPipeline(MODELS_DIR)
@@ -279,7 +346,6 @@ def run_test_videos(videos_dir: Path, show_preview: bool):
     random.shuffle(prey_videos)
     random.shuffle(no_prey_videos)
 
-    # Interleave: one prey, one no_prey, alternating, then append the leftovers
     video_entries: list[tuple[Path, str]] = []
     for p, n in zip(prey_videos, no_prey_videos):
         video_entries.append((p, "prey"))
@@ -294,18 +360,44 @@ def run_test_videos(videos_dir: Path, show_preview: bool):
         return
 
     logger.info(f"Found {len(video_entries)} test video(s) — {len(prey_videos)} prey, {len(no_prey_videos)} no_prey")
+    logger.info(f"Cummuli thresholds — no_prey: >{CUMULUS_NO_PREY_THRESHOLD:.2f}  prey: <{CUMULUS_PREY_THRESHOLD:.1f}  patience: {CUMULUS_PATIENCE} faces")
 
+    # Overall counters (event-level)
     total_frames_processed = 0
-    total_cat_det   = 0
-    total_correct   = 0
-    total_wrong     = 0
-    total_dk        = 0
-    total_no_face   = 0
+    total_cat_det     = 0
+    total_ev_correct  = 0
+    total_ev_wrong    = 0
+    total_ev_dk       = 0
+
+    def _log_event_decision(event_nr, cum, ground_truth, v_ev_correct, v_ev_wrong, v_ev_dk):
+        """Emit a decision line for one completed event. Returns updated counters."""
+        decision = cum.decide()
+        if decision == "dk":
+            result = "DK     "
+            v_ev_dk += 1
+        elif (decision == "prey" and ground_truth == "prey") or \
+             (decision == "no_prey" and ground_truth == "no_prey"):
+            result = "CORRECT"
+            v_ev_correct += 1
+        else:
+            result = "WRONG  "
+            v_ev_wrong += 1
+
+        arrow = {
+            "prey":    "→ PREY",
+            "no_prey": "→ NO PREY",
+            "dk":      "→ DK (undecided)",
+        }[decision]
+        logger.info(
+            f"  *** EVENT #{event_nr} DECISION: {cum.status_str()} {arrow}"
+            f" | gt={ground_truth.upper()} | {result}"
+        )
+        return v_ev_correct, v_ev_wrong, v_ev_dk
 
     for video_path, ground_truth in video_entries:
         sep = "=" * 70
         logger.info(sep)
-        logger.info(f"VIDEO      : {video_path.name}")
+        logger.info(f"VIDEO       : {video_path.name}")
         logger.info(f"GROUND TRUTH: {ground_truth.upper()}")
         logger.info(sep)
 
@@ -318,14 +410,17 @@ def run_test_videos(videos_dir: Path, show_preview: bool):
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         logger.info(f"  {total_video_frames} frames @ {fps:.1f} fps — analyzing every {VISION_EVERY_N_FRAMES} frame(s)")
 
-        frame_idx      = 0
-        v_processed    = 0
-        v_cat_det      = 0
-        v_correct      = 0
-        v_wrong        = 0
-        v_dk           = 0
-        v_no_face      = 0
-        aborted        = False
+        frame_idx   = 0
+        v_processed = 0
+        v_cat_det   = 0
+        v_ev_correct = 0
+        v_ev_wrong   = 0
+        v_ev_dk      = 0
+        miss_streak  = 0
+        in_event     = False
+        event_nr     = 0
+        cum          = CumulusAccumulator()
+        aborted      = False
 
         while True:
             ok, frame = cap.read()
@@ -346,18 +441,29 @@ def run_test_videos(videos_dir: Path, show_preview: bool):
             det = cat_finder.detect(frame)
 
             if not det.found or det.box is None:
-                if show_preview:
-                    _draw_preview(
-                        frame, None, None,
-                        f"gt={ground_truth} | no cat",
-                        window_title=f"Test: {video_path.name}",
+                miss_streak += 1
+                if in_event and miss_streak >= EVENT_END_MISSES:
+                    v_ev_correct, v_ev_wrong, v_ev_dk = _log_event_decision(
+                        event_nr, cum, ground_truth, v_ev_correct, v_ev_wrong, v_ev_dk
                     )
+                    cum.reset()
+                    in_event = False
+                if show_preview:
+                    _draw_preview(frame, None, None, f"gt={ground_truth} | no cat",
+                                  window_title=f"Test: {video_path.name}")
                     if cv2.waitKey(1) & 0xFF == ord('q'):
                         aborted = True
                         break
                 continue
 
-            v_cat_det += 1
+            # Cat found
+            v_cat_det  += 1
+            miss_streak = 0
+            if not in_event:
+                event_nr += 1
+                in_event  = True
+                cum.reset()
+
             (x1, y1), (x2, y2) = det.box
             res = pipeline.analyze(frame, det.box, det.score)
 
@@ -367,73 +473,72 @@ def run_test_videos(videos_dir: Path, show_preview: bool):
             ff_str   = (f" ff={'OK      ' if res.ff_confirmed else 'REJECTED'} ({res.ff_score:.2f})"
                         if res.ff_score is not None else " ff=n/a        ")
 
-            if not res.face:
-                v_no_face += 1
-                match_str = "NO_FACE"
-            elif res.ff_confirmed is False:
-                v_no_face += 1
-                match_str = "FF_REJECTED"
-            elif res.prey is None:
-                v_dk += 1
-                match_str = "DK     "
-            elif (res.prey and ground_truth == "prey") or (not res.prey and ground_truth == "no_prey"):
-                v_correct += 1
-                match_str = "CORRECT"
+            if res.ff_confirmed and res.prey_conf is not None:
+                contrib = cum.update(res.prey_conf)
+                cum_str = f" cum={contrib:+d} avg={cum.avg:+.2f} ({cum.face_count}f)"
             else:
-                v_wrong += 1
-                match_str = "WRONG  "
+                cum_str = f" cum=-- avg={cum.avg:+.2f} ({cum.face_count}f)" if cum.face_count else " cum=--"
 
             gt_tag = f"[gt={ground_truth.upper()[:7]:7}]"
             logger.info(
                 f"  {gt_tag} frame {frame_idx:5d}/{total_video_frames}"
-                f" | cat={det.score:.2f} | {face_str}{ff_str} | pred={prey_str} {conf_str}"
-                f" | {match_str}"
+                f" | cat={det.score:.2f} | {face_str}{ff_str} | pred={prey_str} {conf_str} |{cum_str}"
             )
 
+            # Check if accumulator crossed a threshold this frame
+            decision = cum.decide()
+            if decision != "dk":
+                v_ev_correct, v_ev_wrong, v_ev_dk = _log_event_decision(
+                    event_nr, cum, ground_truth, v_ev_correct, v_ev_wrong, v_ev_dk
+                )
+                cum.reset()  # reset and keep watching within the same event
+
             if show_preview:
-                overlay = (
-                    f"gt={ground_truth} | pred={'PREY' if res.prey else ('no_prey' if res.prey is False else 'dk')}"
-                    f" | {match_str.strip()}"
-                )
-                _draw_preview(
-                    frame, det.box, res.face_box, overlay,
-                    window_title=f"Test: {video_path.name}",
-                )
+                cum_label = cum.status_str() if cum.face_count else "accumulating..."
+                overlay = f"gt={ground_truth} | {cum_label}"
+                _draw_preview(frame, det.box, res.face_box, overlay,
+                              window_title=f"Test: {video_path.name}")
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     aborted = True
                     break
+
+        # Video ended — close any open event
+        if in_event and cum.face_count > 0:
+            v_ev_correct, v_ev_wrong, v_ev_dk = _log_event_decision(
+                event_nr, cum, ground_truth, v_ev_correct, v_ev_wrong, v_ev_dk
+            )
 
         cap.release()
 
         if aborted:
             logger.info("  (video aborted by user — Q key)")
 
-        attempts = v_correct + v_wrong
-        acc = v_correct / attempts * 100 if attempts else 0.0
+        total_events = v_ev_correct + v_ev_wrong + v_ev_dk
+        ev_acc = v_ev_correct / (v_ev_correct + v_ev_wrong) * 100 if (v_ev_correct + v_ev_wrong) else 0.0
 
         logger.info(f"  {'─'*60}")
         logger.info(f"  SUMMARY  {video_path.name}")
         logger.info(f"    Frames processed : {v_processed}")
         logger.info(f"    Cat detections   : {v_cat_det}")
-        logger.info(f"    No face found    : {v_no_face}")
-        logger.info(f"    CORRECT          : {v_correct}")
-        logger.info(f"    WRONG            : {v_wrong}")
-        logger.info(f"    DK (uncertain)   : {v_dk}")
-        logger.info(f"    Accuracy (excl dk+no_face): {acc:.1f}%")
+        logger.info(f"    Events           : {total_events}")
+        logger.info(f"    Event CORRECT    : {v_ev_correct}")
+        logger.info(f"    Event WRONG      : {v_ev_wrong}")
+        logger.info(f"    Event DK         : {v_ev_dk}")
+        logger.info(f"    Event accuracy   : {ev_acc:.1f}%  (excl DK)")
         logger.info(f"  {'─'*60}")
 
         total_frames_processed += v_processed
-        total_cat_det  += v_cat_det
-        total_correct  += v_correct
-        total_wrong    += v_wrong
-        total_dk       += v_dk
-        total_no_face  += v_no_face
+        total_cat_det    += v_cat_det
+        total_ev_correct += v_ev_correct
+        total_ev_wrong   += v_ev_wrong
+        total_ev_dk      += v_ev_dk
 
     if show_preview:
         cv2.destroyAllWindows()
 
-    total_attempts = total_correct + total_wrong
-    total_acc = total_correct / total_attempts * 100 if total_attempts else 0.0
+    total_events = total_ev_correct + total_ev_wrong + total_ev_dk
+    total_acc    = total_ev_correct / (total_ev_correct + total_ev_wrong) * 100 \
+                   if (total_ev_correct + total_ev_wrong) else 0.0
 
     sep = "=" * 70
     logger.info(sep)
@@ -441,11 +546,11 @@ def run_test_videos(videos_dir: Path, show_preview: bool):
     logger.info(f"  Videos tested        : {len(video_entries)}")
     logger.info(f"  Frames processed     : {total_frames_processed}")
     logger.info(f"  Cat detections       : {total_cat_det}")
-    logger.info(f"  No face found        : {total_no_face}")
-    logger.info(f"  CORRECT predictions  : {total_correct}")
-    logger.info(f"  WRONG predictions    : {total_wrong}")
-    logger.info(f"  DK (uncertain)       : {total_dk}")
-    logger.info(f"  Accuracy (excl dk+no_face): {total_acc:.1f}%")
+    logger.info(f"  Total events         : {total_events}")
+    logger.info(f"  Event CORRECT        : {total_ev_correct}")
+    logger.info(f"  Event WRONG          : {total_ev_wrong}")
+    logger.info(f"  Event DK             : {total_ev_dk}")
+    logger.info(f"  Event accuracy       : {total_acc:.1f}%  (excl DK)")
     logger.info(sep)
 
 
