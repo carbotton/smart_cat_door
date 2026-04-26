@@ -6,3 +6,4 @@ RPi.GPIO==0.7.1
 tensorflow==2.12.0
 tensorflow_object_detection_api==0.1.1
 lgpio>=0.2.2
+requests>=2.28

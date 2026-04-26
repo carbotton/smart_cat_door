@@ -23,6 +23,7 @@ from config import (
     CUMULUS_PATIENCE,
 )
 from door_controller import lock_door, unlock_door, door_cleanup
+import notifier
 
 import override  # reads hardware button state (falls back gracefully when no GPIO)
 override_btn = override.init_override_button(27)
@@ -189,6 +190,7 @@ def _save_snapshot(frame, label: str):
     path = SNAPSHOTS_DIR / f"{ts}_{label}.jpg"
     cv2.imwrite(str(path), frame)
     logger.info(f"  Snapshot saved: {path.name}")
+    return path
 
 
 # ── Camera helpers ──────────────────────────────────────────────────────────
@@ -288,12 +290,14 @@ def run_vision_forever(stop_event: threading.Event):
         decision = cum.decide()
         if decision == "no_prey":
             logger.info(f"  >>> CUMULUS → NO PREY  ({cum.status_str()}) — unlocking")
-            _save_snapshot(frame, "no_prey")
+            snap = _save_snapshot(frame, "no_prey")
+            notifier.send_snapshot(snap, "no_prey")
             door_decision_cb("no_prey", score=cum.avg, event_nr=event_nr)
             cum.reset()
         elif decision == "prey":
             logger.info(f"  >>> CUMULUS → PREY  ({cum.status_str()}) — locking")
-            _save_snapshot(frame, "prey")
+            snap = _save_snapshot(frame, "prey")
+            notifier.send_snapshot(snap, "prey")
             door_decision_cb("prey", score=cum.avg, event_nr=event_nr)
             cum.reset()
         else:
