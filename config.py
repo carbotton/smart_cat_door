@@ -17,7 +17,7 @@ OVERRIDE_DEFAULT_FORCE_OPEN = False
 # =========================
 # Debug
 # =========================
-SHOW_PREVIEW = True   # open a live camera window (disable on Pi / headless)
+SHOW_PREVIEW = False  # headless on Pi
 
 # =========================
 # Vision inputs
@@ -26,7 +26,7 @@ SHOW_PREVIEW = True   # open a live camera window (disable on Pi / headless)
 # Examples:
 #   CAMERA_SOURCE = 0
 #   CAMERA_SOURCE = "rtsp://user:pass@ip/stream"
-CAMERA_SOURCE = 0  # laptop webcam
+CAMERA_SOURCE = "rtsp://169.254.1.1:554/live/0/MAIN"
 
 # If using RTSP, sometimes OpenCV needs a smaller buffer to reduce latency
 CAP_PROP_BUFFERSIZE = 1
