@@ -25,13 +25,13 @@ class PreyClassifier:
         custom = {"get_f1": get_f1} if "F1" in model_path.name else None
         self.model = tf_keras.models.load_model(str(model_path), custom_objects=custom)
 
-    def predict(self, snout_bgr: np.ndarray) -> tuple[bool, float, float]:
+    def predict(self, snout_bgr: np.ndarray, threshold: float = 0.5) -> tuple[bool, float, float]:
         img = cv2.resize(snout_bgr, (self.TARGET, self.TARGET)) * (1.0 / 255.0)
         x = img.reshape((1, self.TARGET, self.TARGET, 3))
         t0 = time.time()
         p = float(self.model.predict(x, verbose=0)[0][0])
         dt = time.time() - t0
-        return (p > 0.5), p, dt
+        return (p > threshold), p, dt
 
 
 class FaceFurClassifier:
@@ -40,14 +40,13 @@ class FaceFurClassifier:
     def __init__(self, model_path: Path):
         self.model = tf_keras.models.load_model(str(model_path))
 
-    def face_bool(self, snout_bgr: np.ndarray) -> tuple[bool, float, float]:
+    def face_bool(self, snout_bgr: np.ndarray, threshold: float = 0.5) -> tuple[bool, float, float]:
         img = cv2.resize(snout_bgr, (self.TARGET, self.TARGET)) * (1.0 / 255.0)
         x = img.reshape((1, self.TARGET, self.TARGET, 3))
         t0 = time.time()
         p = float(self.model.predict(x, verbose=0)[0][0])
         dt = time.time() - t0
-        # Same behavior as fork: pred<=0.5 => True
-        return (p <= 0.5), p, dt
+        return (p <= threshold), p, dt
 
 
 class HaarCatFace:

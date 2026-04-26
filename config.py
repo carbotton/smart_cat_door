@@ -42,6 +42,18 @@ CAPTURE_WIDTH = 640
 CAPTURE_HEIGHT = 360
 
 # =========================
+# Classifier thresholds
+# =========================
+# FaceFurClassifier: p <= FF_FACE_THRESHOLD is treated as "face confirmed".
+# Lower = stricter gate (rejects more); raise to pass more borderline snout crops.
+FF_FACE_THRESHOLD = 0.65   # default was hard-coded 0.50
+
+# PreyClassifier: p > PREY_THRESHOLD is treated as "prey detected".
+# Logs show correct prey frames clustering at 0.50-0.51, wrong ones at 0.34-0.49.
+# Lowering to 0.40 captures those borderline-but-correct detections.
+PREY_THRESHOLD = 0.40      # default was hard-coded 0.50
+
+# =========================
 # Model assets
 # =========================
 # Point this at your *models/* directory.

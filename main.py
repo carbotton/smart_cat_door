@@ -233,12 +233,14 @@ def run_vision_forever(stop_event: threading.Event, show_preview: bool):
 
         prey_str  = {True: "PREY", False: "no_prey", None: "dk"}.get(res.prey, "?")
         conf_str  = f" conf={res.prey_conf:.2f}" if res.prey_conf is not None else ""
-        face_str  = "face=yes" if res.face else "face=no "
+        face_str  = f"face={res.face_method or 'no'}"
+        ff_str    = (f" ff={'OK' if res.ff_confirmed else 'REJECTED'} ({res.ff_score:.2f})"
+                     if res.ff_score is not None else " ff=n/a")
         infer_str = f" tfod={det.inference_s*1000:.0f}ms"
 
         logger.info(
             f"  Frame {frame_idx:5d} | cat={det.score:.2f} [{x1},{y1},{x2},{y2}]"
-            f" | {face_str} | pred={prey_str}{conf_str}{infer_str}"
+            f" | {face_str}{ff_str} | pred={prey_str}{conf_str}{infer_str}"
         )
 
         last_label = f"event#{event_nr} {det.score:.2f} | {prey_str}{conf_str}"
@@ -351,11 +353,16 @@ def run_test_videos(videos_dir: Path, show_preview: bool):
 
             prey_str = {True: "PREY   ", False: "no_prey", None: "dk     "}.get(res.prey, "?      ")
             conf_str = f"conf={res.prey_conf:.2f}" if res.prey_conf is not None else "conf=n/a"
-            face_str = "face=yes" if res.face else "face=no "
+            face_str = f"face={res.face_method or 'no':4}"
+            ff_str   = (f" ff={'OK      ' if res.ff_confirmed else 'REJECTED'} ({res.ff_score:.2f})"
+                        if res.ff_score is not None else " ff=n/a        ")
 
             if not res.face:
                 v_no_face += 1
                 match_str = "NO_FACE"
+            elif res.ff_confirmed is False:
+                v_no_face += 1
+                match_str = "FF_REJECTED"
             elif res.prey is None:
                 v_dk += 1
                 match_str = "DK     "
@@ -369,7 +376,7 @@ def run_test_videos(videos_dir: Path, show_preview: bool):
             gt_tag = f"[gt={ground_truth.upper()[:7]:7}]"
             logger.info(
                 f"  {gt_tag} frame {frame_idx:5d}/{total_video_frames}"
-                f" | cat={det.score:.2f} | {face_str} | pred={prey_str} {conf_str}"
+                f" | cat={det.score:.2f} | {face_str}{ff_str} | pred={prey_str} {conf_str}"
                 f" | {match_str}"
             )
 

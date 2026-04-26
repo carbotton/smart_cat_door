@@ -6,14 +6,26 @@ import numpy as np
 
 from .stages import PreyClassifier, FaceFurClassifier, EyeDetector, HaarCatFace
 
+try:
+    from config import FF_FACE_THRESHOLD, PREY_THRESHOLD
+except ImportError:
+    FF_FACE_THRESHOLD = 0.65
+    PREY_THRESHOLD = 0.40
+
 
 @dataclass
 class VisionResult:
     cat: bool
     cat_score: float | None
     cat_box: np.ndarray | None
+    # face localisation
     face: bool
     face_box: np.ndarray | None
+    face_method: str | None          # "haar" | "eye" | None
+    # FaceFurClassifier gate
+    ff_confirmed: bool | None        # True=face, False=rejected, None=never ran
+    ff_score: float | None
+    # PreyClassifier output
     prey: bool | None
     prey_conf: float | None
 
@@ -33,6 +45,7 @@ class VisionPipeline:
 
         face_box = None
         face = False
+        face_method = None
 
         # 1) Haar inside cat ROI
         if roi.size:
@@ -43,6 +56,7 @@ class VisionPipeline:
                 bb[:, 1] += y1
                 face_box = bb
                 face = True
+                face_method = "haar"
 
         # 2) Fallback: eye detector -> snout box
         if not face:
@@ -51,17 +65,21 @@ class VisionPipeline:
             if fx2 > fx1 and fy2 > fy1:
                 face_box = bb
                 face = True
+                face_method = "eye"
 
         prey = None
         prey_conf = None
+        ff_confirmed = None
+        ff_score = None
 
         if face and face_box is not None:
             (fx1, fy1), (fx2, fy2) = face_box
             snout = frame_bgr[max(fy1,0):min(fy2,frame_bgr.shape[0]), max(fx1,0):min(fx2,frame_bgr.shape[1])]
             if snout.size:
-                ff_ok, _, _ = self.ff.face_bool(snout)
+                ff_ok, ff_score, _ = self.ff.face_bool(snout, threshold=FF_FACE_THRESHOLD)
+                ff_confirmed = ff_ok
                 if ff_ok:
-                    prey, prey_conf, _ = self.pc.predict(snout)
+                    prey, prey_conf, _ = self.pc.predict(snout, threshold=PREY_THRESHOLD)
 
         return VisionResult(
             cat=True,
@@ -69,6 +87,9 @@ class VisionPipeline:
             cat_box=cat_box,
             face=face,
             face_box=face_box,
+            face_method=face_method,
+            ff_confirmed=ff_confirmed,
+            ff_score=ff_score,
             prey=prey,
             prey_conf=prey_conf,
         )
