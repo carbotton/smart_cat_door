@@ -215,39 +215,75 @@ def _open_capture(source: Union[int, str]):
     return cap
 
 
+class _LatestFrameReader:
+    """Background thread that drains the RTSP buffer, always keeping the newest frame."""
+
+    def __init__(self, source: Union[int, str]):
+        self._source = source
+        self._lock = threading.Lock()
+        self._frame = None
+        self._ok = False
+        self._cap = _open_capture(source)
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        fail_streak = 0
+        while True:
+            ok, frame = self._cap.read()
+            if ok and frame is not None:
+                with self._lock:
+                    self._frame = frame
+                    self._ok = True
+                fail_streak = 0
+            else:
+                fail_streak += 1
+                if fail_streak % 10 == 1:
+                    logger.warning(f"Camera read failed (streak {fail_streak}); reconnecting...")
+                    self._cap.release()
+                    time.sleep(3)
+                    self._cap = _open_capture(self._source)
+                else:
+                    time.sleep(0.1)
+
+    def read(self):
+        with self._lock:
+            return self._ok, (self._frame.copy() if self._frame is not None else None)
+
+    def is_opened(self):
+        return self._cap.isOpened()
+
+
 # ── Vision loop ─────────────────────────────────────────────────────────────
 
 def run_vision_forever(stop_event: threading.Event):
     cat_finder = CatFinderTFOD(TFOD_FROZEN_GRAPH)
     pipeline   = VisionPipeline(MODELS_DIR)
 
-    cap = _open_capture(CAMERA_SOURCE)
-    if not cap.isOpened():
+    reader = _LatestFrameReader(CAMERA_SOURCE)
+
+    # Wait for the first frame before declaring the camera open
+    for _ in range(300):
+        if reader.read()[0]:
+            break
+        time.sleep(0.1)
+    else:
         raise RuntimeError(f"Unable to open camera source: {CAMERA_SOURCE}")
 
     logger.info(f"Camera opened: {CAMERA_SOURCE}")
     logger.info(f"Cummuli thresholds — no_prey: >{CUMULUS_NO_PREY_THRESHOLD:.2f}  prey: <{CUMULUS_PREY_THRESHOLD:.1f}  patience: {CUMULUS_PATIENCE} faces")
 
-    frame_idx        = 0
-    event_nr         = 0
-    miss_streak      = 0
-    in_event         = False
-    cum              = CumulusAccumulator()
-    read_fail_streak = 0
+    frame_idx   = 0
+    event_nr    = 0
+    miss_streak = 0
+    in_event    = False
+    cum         = CumulusAccumulator()
 
     while not stop_event.is_set():
-        ok, frame = cap.read()
+        ok, frame = reader.read()
         if not ok or frame is None:
-            read_fail_streak += 1
-            if read_fail_streak % 10 == 1:
-                logger.warning(f"Camera read failed (streak {read_fail_streak}); reconnecting...")
-                cap.release()
-                time.sleep(3)
-                cap = _open_capture(CAMERA_SOURCE)
-            else:
-                time.sleep(0.1)
+            time.sleep(0.1)
             continue
-        read_fail_streak = 0
 
         frame_idx += 1
 
