@@ -71,6 +71,9 @@ PREY_THRESHOLD = 0.40      # default was hard-coded 0.50
 # Point this at your *models/* directory.
 MODELS_DIR = Path(__file__).resolve().parent / "models"
 
+# Directory where decision snapshots are saved (created automatically).
+SNAPSHOTS_DIR = Path(__file__).resolve().parent / "snapshots"
+
 # TF Object Detection frozen graph (COCO SSD MobileNetV2).
 # Find it with:
 #   find ~ -name frozen_inference_graph.pb | grep ssdlite_mobilenet_v2_coco_2018_05_09

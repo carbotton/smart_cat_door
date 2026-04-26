@@ -1,5 +1,6 @@
 import threading
 import time
+from datetime import datetime
 from typing import Optional, Union
 import subprocess
 import logging
@@ -16,6 +17,7 @@ from config import (
     EVENT_END_MISSES,
     MODELS_DIR,
     TFOD_FROZEN_GRAPH,
+    SNAPSHOTS_DIR,
     CUMULUS_NO_PREY_THRESHOLD,
     CUMULUS_PREY_THRESHOLD,
     CUMULUS_PATIENCE,
@@ -179,6 +181,16 @@ def timer_tick_forever(stop_event: threading.Event):
         time.sleep(0.5)
 
 
+# ── Snapshot helper ─────────────────────────────────────────────────────────
+
+def _save_snapshot(frame, label: str):
+    SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = SNAPSHOTS_DIR / f"{ts}_{label}.jpg"
+    cv2.imwrite(str(path), frame)
+    logger.info(f"  Snapshot saved: {path.name}")
+
+
 # ── Camera helpers ──────────────────────────────────────────────────────────
 
 def _open_capture(source: Union[int, str]):
@@ -276,10 +288,12 @@ def run_vision_forever(stop_event: threading.Event):
         decision = cum.decide()
         if decision == "no_prey":
             logger.info(f"  >>> CUMULUS → NO PREY  ({cum.status_str()}) — unlocking")
+            _save_snapshot(frame, "no_prey")
             door_decision_cb("no_prey", score=cum.avg, event_nr=event_nr)
             cum.reset()
         elif decision == "prey":
             logger.info(f"  >>> CUMULUS → PREY  ({cum.status_str()}) — locking")
+            _save_snapshot(frame, "prey")
             door_decision_cb("prey", score=cum.avg, event_nr=event_nr)
             cum.reset()
         else:
