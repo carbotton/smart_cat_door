@@ -14,6 +14,7 @@ from config import (
     LOCK_DURATION_SECONDS,
     CLEAN_CONFIRMATIONS,
     OVERRIDE_DEFAULT_FORCE_OPEN,
+    STARTUP_UNLOCK_SECONDS,
     CAMERA_SOURCE,
     CAP_PROP_BUFFERSIZE,
     VISION_EVERY_N_FRAMES,
@@ -324,6 +325,13 @@ def main():
     logger.info("Smart Cat Door system started.")
 
     setup_ethernet_link_local()
+
+    if STARTUP_UNLOCK_SECONDS > 0:
+        with _state_lock:
+            _apply_unlock(f"startup_grace_{STARTUP_UNLOCK_SECONDS}s")
+        logger.info(f"Startup grace period: door open for {STARTUP_UNLOCK_SECONDS}s.")
+        time.sleep(STARTUP_UNLOCK_SECONDS)
+        logger.info("Startup grace period ended — switching to vision control.")
 
     with _state_lock:
         _apply_lock("startup_default_locked")

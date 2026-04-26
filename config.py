@@ -14,6 +14,10 @@ CLEAN_CONFIRMATIONS = 1              # cummuli accumulator already confirms acro
 # If True, door will be forced open at startup until you toggle it off
 OVERRIDE_DEFAULT_FORCE_OPEN = False
 
+# Seconds the door stays unlocked at startup before switching to vision control.
+# Gives the cat a chance to enter after a reboot. Set to 0 to disable.
+STARTUP_UNLOCK_SECONDS = 60
+
 # =========================
 # Debug
 # =========================
