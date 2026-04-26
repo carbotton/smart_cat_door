@@ -115,14 +115,14 @@ def _apply_lock(reason: str):
     global door_locked
     lock_door()
     door_locked = True
-    logger.info(f"Door -> LOCKED  ({reason})")
+    logger.info(f"DOOR CLOSED — {reason}")
 
 
 def _apply_unlock(reason: str):
     global door_locked
     unlock_door()
     door_locked = False
-    logger.info(f"Door -> UNLOCKED ({reason})")
+    logger.info(f"DOOR OPENED — {reason}")
 
 
 def door_decision_cb(decision: str, score=None, event_nr=None):
@@ -392,6 +392,10 @@ def run_test_videos(videos_dir: Path, show_preview: bool):
             f"  *** EVENT #{event_nr} DECISION: {cum.status_str()} {arrow}"
             f" | gt={ground_truth.upper()} | {result}"
         )
+        if decision == "no_prey":
+            logger.info(f"DOOR OPENED — cumulus no_prey confirmed (avg={cum.avg:+.2f})")
+        elif decision == "prey":
+            logger.info(f"DOOR CLOSED — cumulus prey confirmed (avg={cum.avg:+.2f})")
         return v_ev_correct, v_ev_wrong, v_ev_dk
 
     for video_path, ground_truth in video_entries:
