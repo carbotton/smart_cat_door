@@ -1,4 +1,5 @@
 import argparse
+import random
 import threading
 import time
 from pathlib import Path
@@ -272,18 +273,27 @@ def run_test_videos(videos_dir: Path, show_preview: bool):
     cat_finder = CatFinderTFOD(TFOD_FROZEN_GRAPH)
     pipeline   = VisionPipeline(MODELS_DIR)
 
+    prey_videos    = sorted((videos_dir / "with_prey").glob("*.mp4")) if (videos_dir / "with_prey").exists() else []
+    no_prey_videos = sorted((videos_dir / "no_prey").glob("*.mp4"))  if (videos_dir / "no_prey").exists()  else []
+
+    random.shuffle(prey_videos)
+    random.shuffle(no_prey_videos)
+
+    # Interleave: one prey, one no_prey, alternating, then append the leftovers
     video_entries: list[tuple[Path, str]] = []
-    for gt_label, subdir in [("prey", "with_prey"), ("no_prey", "no_prey")]:
-        d = videos_dir / subdir
-        if d.exists():
-            for p in sorted(d.glob("*.mp4")):
-                video_entries.append((p, gt_label))
+    for p, n in zip(prey_videos, no_prey_videos):
+        video_entries.append((p, "prey"))
+        video_entries.append((n, "no_prey"))
+    for p in prey_videos[len(no_prey_videos):]:
+        video_entries.append((p, "prey"))
+    for n in no_prey_videos[len(prey_videos):]:
+        video_entries.append((n, "no_prey"))
 
     if not video_entries:
         logger.error(f"No .mp4 files found under {videos_dir}/with_prey/ or {videos_dir}/no_prey/")
         return
 
-    logger.info(f"Found {len(video_entries)} test video(s) in {videos_dir}")
+    logger.info(f"Found {len(video_entries)} test video(s) — {len(prey_videos)} prey, {len(no_prey_videos)} no_prey")
 
     total_frames_processed = 0
     total_cat_det   = 0
