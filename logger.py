@@ -7,6 +7,7 @@ os.makedirs(log_dir, exist_ok=True)
 
 logger = logging.getLogger("cat_door_logger")
 logger.setLevel(logging.INFO)
+logger.propagate = False
 
 plain_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 

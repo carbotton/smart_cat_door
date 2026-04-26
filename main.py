@@ -163,6 +163,7 @@ def door_decision_cb(decision: str, score=None, event_nr=None):
             logger.info(f"  Clean confirmation {clean_hits_this_event}/{CLEAN_CONFIRMATIONS}")
             if clean_hits_this_event >= CLEAN_CONFIRMATIONS:
                 _apply_unlock("clean_confirmed")
+                clean_hits_this_event = 0
             return
 
         logger.info("  DK — keeping previous door state.")
@@ -226,18 +227,26 @@ def run_vision_forever(stop_event: threading.Event):
     logger.info(f"Camera opened: {CAMERA_SOURCE}")
     logger.info(f"Cummuli thresholds — no_prey: >{CUMULUS_NO_PREY_THRESHOLD:.2f}  prey: <{CUMULUS_PREY_THRESHOLD:.1f}  patience: {CUMULUS_PATIENCE} faces")
 
-    frame_idx   = 0
-    event_nr    = 0
-    miss_streak = 0
-    in_event    = False
-    cum         = CumulusAccumulator()
+    frame_idx        = 0
+    event_nr         = 0
+    miss_streak      = 0
+    in_event         = False
+    cum              = CumulusAccumulator()
+    read_fail_streak = 0
 
     while not stop_event.is_set():
         ok, frame = cap.read()
         if not ok or frame is None:
-            logger.warning("Camera read failed; retrying...")
-            time.sleep(0.1)
+            read_fail_streak += 1
+            if read_fail_streak % 10 == 1:
+                logger.warning(f"Camera read failed (streak {read_fail_streak}); reconnecting...")
+                cap.release()
+                time.sleep(3)
+                cap = _open_capture(CAMERA_SOURCE)
+            else:
+                time.sleep(0.1)
             continue
+        read_fail_streak = 0
 
         frame_idx += 1
 
