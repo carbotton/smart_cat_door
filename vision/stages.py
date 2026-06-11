@@ -26,10 +26,12 @@ class PreyClassifier:
         self.model = tf_keras.models.load_model(str(model_path), custom_objects=custom)
 
     def predict(self, snout_bgr: np.ndarray, threshold: float = 0.5) -> tuple[bool, float, float]:
-        img = cv2.resize(snout_bgr, (self.TARGET, self.TARGET)) * (1.0 / 255.0)
+        img = cv2.resize(snout_bgr, (self.TARGET, self.TARGET)).astype(np.float32) / 255.0
         x = img.reshape((1, self.TARGET, self.TARGET, 3))
         t0 = time.time()
-        p = float(self.model.predict(x, verbose=0)[0][0])
+        # direct call avoids model.predict()'s per-call setup overhead and its
+        # memory growth when called in a long-running loop
+        p = float(self.model(x, training=False).numpy()[0][0])
         dt = time.time() - t0
         return (p > threshold), p, dt
 
@@ -41,10 +43,10 @@ class FaceFurClassifier:
         self.model = tf_keras.models.load_model(str(model_path))
 
     def face_bool(self, snout_bgr: np.ndarray, threshold: float = 0.5) -> tuple[bool, float, float]:
-        img = cv2.resize(snout_bgr, (self.TARGET, self.TARGET)) * (1.0 / 255.0)
+        img = cv2.resize(snout_bgr, (self.TARGET, self.TARGET)).astype(np.float32) / 255.0
         x = img.reshape((1, self.TARGET, self.TARGET, 3))
         t0 = time.time()
-        p = float(self.model.predict(x, verbose=0)[0][0])
+        p = float(self.model(x, training=False).numpy()[0][0])
         dt = time.time() - t0
         return (p <= threshold), p, dt
 
@@ -99,7 +101,7 @@ class EyeDetector:
         x = (pre.astype("float32") / 255.0).reshape((1, self.TARGET, self.TARGET, 3))
 
         t0 = time.time()
-        pred = self.model.predict(x, verbose=0)[0].reshape((-1, 2))
+        pred = self.model(x, training=False).numpy()[0].reshape((-1, 2))
         dt = time.time() - t0
 
         pred[:, 0] = (pred[:, 0] - left) / ratio + x1

@@ -30,18 +30,18 @@ SHOW_PREVIEW = False  # headless on Pi
 # Examples:
 #   CAMERA_SOURCE = 0
 #   CAMERA_SOURCE = "rtsp://user:pass@ip/stream"
-CAMERA_SOURCE = "rtsp://169.254.1.1:554/live/0/MAIN"
+# Use the camera's SUB stream: lower resolution = much cheaper H264 decode on
+# the Pi. If your camera does not expose /SUB, revert to /MAIN.
+CAMERA_SOURCE = "rtsp://169.254.1.1:554/live/0/SUB"
 
 # If using RTSP, sometimes OpenCV needs a smaller buffer to reduce latency
 CAP_PROP_BUFFERSIZE = 1
 
-# Run cat detection / inference every N frames to reduce load
-VISION_EVERY_N_FRAMES = 3
-
 # If no cat is seen for this many consecutive inference cycles, we consider the "event" ended
 EVENT_END_MISSES = 3
 
-# Resolution
+# Requested capture resolution. NOTE: ignored by RTSP sources (the stream's
+# native resolution always wins) — only applies to local V4L2 cameras.
 CAPTURE_WIDTH = 640
 CAPTURE_HEIGHT = 360
 

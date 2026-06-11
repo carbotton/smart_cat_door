@@ -41,9 +41,20 @@ class CatFinderTFOD:
         self.classes = self.graph.get_tensor_by_name("detection_classes:0")
         self.num = self.graph.get_tensor_by_name("num_detections:0")
 
+    # SSD resizes its input to 300x300 internally, so feeding anything wider
+    # than this only burns CPU on color conversion and tensor transfer.
+    MAX_INFER_WIDTH = 640
+
     def detect(self, frame_bgr: np.ndarray, score_thresh: float = 0.45, max_checks: int = 10) -> CatDetection:
-        # TF-OD expects RGB
-        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        h, w = frame_bgr.shape[:2]
+        small = frame_bgr
+        if w > self.MAX_INFER_WIDTH:
+            scale = self.MAX_INFER_WIDTH / w
+            small = cv2.resize(frame_bgr, (self.MAX_INFER_WIDTH, int(h * scale)))
+
+        # TF-OD expects RGB; boxes come back normalized so they map onto the
+        # original full-resolution frame regardless of the resize above.
+        rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
         inp = np.expand_dims(rgb, axis=0)
 
         t0 = time.time()
@@ -72,6 +83,5 @@ class CatFinderTFOD:
             return CatDetection(found=False, box=None, score=None, inference_s=dt)
 
         ymin, xmin, ymax, xmax = boxes_[best_idx]
-        h, w = frame_bgr.shape[:2]
         box = np.array([[int(xmin * w), int(ymin * h)], [int(xmax * w), int(ymax * h)]], dtype=int)
         return CatDetection(found=True, box=box, score=best_score, inference_s=dt)

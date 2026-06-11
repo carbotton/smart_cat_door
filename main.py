@@ -4,7 +4,6 @@ import time
 from datetime import datetime
 from typing import Optional, Union
 import subprocess
-import logging
 import cv2
 
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "loglevel;quiet")
@@ -17,7 +16,6 @@ from config import (
     STARTUP_UNLOCK_SECONDS,
     CAMERA_SOURCE,
     CAP_PROP_BUFFERSIZE,
-    VISION_EVERY_N_FRAMES,
     EVENT_END_MISSES,
     MODELS_DIR,
     TFOD_FROZEN_GRAPH,
@@ -96,6 +94,10 @@ door_locked: bool = True
 lock_until_ts: Optional[float] = None
 override_force_open: bool = OVERRIDE_DEFAULT_FORCE_OPEN
 
+# While time.time() < grace_until_ts the door stays open and vision decisions
+# are ignored (vision thread still runs so models warm up during the grace).
+grace_until_ts: float = 0.0
+
 last_event_nr: Optional[int] = None
 clean_hits_this_event: int = 0
 
@@ -104,13 +106,13 @@ def setup_ethernet_link_local(
     iface: str = "eth0",
     ip_addr: str = "169.254.1.2/16",
 ):
-    logging.info("Setting up IP address for Ethernet...")
+    logger.info("Setting up IP address for Ethernet...")
     try:
         subprocess.run(["sudo", "ip", "addr", "replace", ip_addr, "dev", iface], check=True)
         subprocess.run(["sudo", "ip", "link", "set", iface, "up"], check=True)
-        logging.info(f"Ethernet {iface} configured with {ip_addr}")
+        logger.info(f"Ethernet {iface} configured with {ip_addr}")
     except subprocess.CalledProcessError as e:
-        logging.error(f"Failed to configure Ethernet {iface}: {e}")
+        logger.error(f"Failed to configure Ethernet {iface}: {e}")
         raise
 
 
@@ -139,6 +141,10 @@ def door_decision_cb(decision: str, score=None, event_nr=None):
             return
 
         now = time.time()
+
+        if now < grace_until_ts:
+            logger.info("  Startup grace active — decision ignored, door stays open.")
+            return
 
         if lock_until_ts is not None and now < lock_until_ts:
             remaining = int(lock_until_ts - now)
@@ -198,6 +204,18 @@ def _save_snapshot(frame, label: str):
     return path
 
 
+def _snapshot_and_notify_async(frame, label: str):
+    """Write snapshot + send Telegram off the vision thread (upload can block 15s)."""
+    def _work(img):
+        try:
+            path = _save_snapshot(img, label)
+            notifier.send_snapshot(path, label)
+        except Exception as e:
+            logger.warning(f"  Snapshot/notify failed: {e}")
+
+    threading.Thread(target=_work, args=(frame.copy(),), daemon=True).start()
+
+
 # ── Camera helpers ──────────────────────────────────────────────────────────
 
 def _open_capture(source: Union[int, str]):
@@ -216,13 +234,21 @@ def _open_capture(source: Union[int, str]):
 
 
 class _LatestFrameReader:
-    """Background thread that drains the RTSP buffer, always keeping the newest frame."""
+    """Background thread that drains the RTSP buffer, always keeping the newest frame.
+
+    Frames carry a sequence number so consumers can block until a *new* frame
+    arrives (no busy loop, no analyzing the same frame twice). If the camera
+    dies the sequence stops advancing and wait_for_frame() times out, so a
+    frozen last frame is never re-delivered.
+    """
+
+    RECONNECT_AFTER_FAILS = 10
 
     def __init__(self, source: Union[int, str]):
         self._source = source
-        self._lock = threading.Lock()
+        self._cond = threading.Condition()
         self._frame = None
-        self._ok = False
+        self._seq = 0
         self._cap = _open_capture(source)
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -232,26 +258,33 @@ class _LatestFrameReader:
         while True:
             ok, frame = self._cap.read()
             if ok and frame is not None:
-                with self._lock:
+                with self._cond:
                     self._frame = frame
-                    self._ok = True
+                    self._seq += 1
+                    self._cond.notify_all()
                 fail_streak = 0
             else:
                 fail_streak += 1
-                if fail_streak % 10 == 1:
-                    logger.warning(f"Camera read failed (streak {fail_streak}); reconnecting...")
+                if fail_streak >= self.RECONNECT_AFTER_FAILS:
+                    logger.warning(f"Camera read failed {fail_streak}x; reconnecting...")
                     self._cap.release()
                     time.sleep(3)
                     self._cap = _open_capture(self._source)
+                    fail_streak = 0
                 else:
                     time.sleep(0.1)
 
-    def read(self):
-        with self._lock:
-            return self._ok, (self._frame.copy() if self._frame is not None else None)
+    def wait_for_frame(self, last_seq: int, timeout: float = 1.0):
+        """Block until a frame newer than last_seq exists.
 
-    def is_opened(self):
-        return self._cap.isOpened()
+        Returns (frame_copy, seq) or (None, last_seq) on timeout.
+        """
+        with self._cond:
+            if self._seq <= last_seq:
+                self._cond.wait(timeout)
+            if self._seq <= last_seq or self._frame is None:
+                return None, last_seq
+            return self._frame.copy(), self._seq
 
 
 # ── Vision loop ─────────────────────────────────────────────────────────────
@@ -263,10 +296,11 @@ def run_vision_forever(stop_event: threading.Event):
     reader = _LatestFrameReader(CAMERA_SOURCE)
 
     # Wait for the first frame before declaring the camera open
-    for _ in range(300):
-        if reader.read()[0]:
+    first_seq = 0
+    for _ in range(30):
+        frame, first_seq = reader.wait_for_frame(first_seq, timeout=1.0)
+        if frame is not None:
             break
-        time.sleep(0.1)
     else:
         raise RuntimeError(f"Unable to open camera source: {CAMERA_SOURCE}")
 
@@ -274,21 +308,18 @@ def run_vision_forever(stop_event: threading.Event):
     logger.info(f"Cummuli thresholds — no_prey: >{CUMULUS_NO_PREY_THRESHOLD:.2f}  prey: <{CUMULUS_PREY_THRESHOLD:.1f}  patience: {CUMULUS_PATIENCE} faces")
 
     frame_idx   = 0
+    last_seq    = first_seq
     event_nr    = 0
     miss_streak = 0
     in_event    = False
     cum         = CumulusAccumulator()
 
     while not stop_event.is_set():
-        ok, frame = reader.read()
-        if not ok or frame is None:
-            time.sleep(0.1)
+        frame, last_seq = reader.wait_for_frame(last_seq, timeout=1.0)
+        if frame is None:
             continue
 
         frame_idx += 1
-
-        if frame_idx % VISION_EVERY_N_FRAMES != 0:
-            continue
 
         det = cat_finder.detect(frame)
 
@@ -339,41 +370,37 @@ def run_vision_forever(stop_event: threading.Event):
         decision = cum.decide()
         if decision == "no_prey":
             logger.info(f"  >>> CUMULUS → NO PREY  ({cum.status_str()}) — unlocking")
-            snap = _save_snapshot(frame, "no_prey")
-            notifier.send_snapshot(snap, "no_prey")
             door_decision_cb("no_prey", score=cum.avg, event_nr=event_nr)
+            _snapshot_and_notify_async(frame, "no_prey")
             cum.reset()
         elif decision == "prey":
             logger.info(f"  >>> CUMULUS → PREY  ({cum.status_str()}) — locking")
-            snap = _save_snapshot(frame, "prey")
-            notifier.send_snapshot(snap, "prey")
             door_decision_cb("prey", score=cum.avg, event_nr=event_nr)
+            _snapshot_and_notify_async(frame, "prey")
             cum.reset()
         else:
             door_decision_cb("dk", score=cum.avg if cum.face_count else None, event_nr=event_nr)
-
-    cap.release()
 
 
 # ── Entry point ─────────────────────────────────────────────────────────────
 
 def main():
+    global grace_until_ts
+
     logger.info("Smart Cat Door system started.")
 
     setup_ethernet_link_local()
 
     if STARTUP_UNLOCK_SECONDS > 0:
+        grace_until_ts = time.time() + STARTUP_UNLOCK_SECONDS
         with _state_lock:
             _apply_unlock(f"startup_grace_{STARTUP_UNLOCK_SECONDS}s")
         logger.info(f"Startup grace period: door open for {STARTUP_UNLOCK_SECONDS}s.")
-        time.sleep(STARTUP_UNLOCK_SECONDS)
-        logger.info("Startup grace period ended — switching to vision control.")
-
-    with _state_lock:
-        _apply_lock("startup_default_locked")
 
     stop_event = threading.Event()
 
+    # Start vision immediately so model loading (slow on the Pi) overlaps the
+    # grace period; door_decision_cb ignores decisions until the grace ends.
     vision_thread = threading.Thread(target=run_vision_forever, args=(stop_event,), daemon=True)
     vision_thread.start()
     logger.info("Vision thread started.")
@@ -381,6 +408,14 @@ def main():
     timer_thread = threading.Thread(target=timer_tick_forever, args=(stop_event,), daemon=True)
     timer_thread.start()
     logger.info("Timer thread started.")
+
+    if STARTUP_UNLOCK_SECONDS > 0:
+        time.sleep(max(0.0, grace_until_ts - time.time()))
+        logger.info("Startup grace period ended — switching to vision control.")
+
+    with _state_lock:
+        if not (bool(getattr(override, "let_in_flag", False)) or OVERRIDE_DEFAULT_FORCE_OPEN):
+            _apply_lock("startup_default_locked")
 
     try:
         while True:
