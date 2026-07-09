@@ -9,9 +9,12 @@ from logger import logger
 from config import (
     LOCK_DURATION_SECONDS,
     CLEAN_CONFIRMATIONS,
+    UNLOCK_DURATION_SECONDS,
     OVERRIDE_DEFAULT_FORCE_OPEN,
     CAMERA_SOURCE,
     CAP_PROP_BUFFERSIZE,
+    CAMERA_MAX_READ_FAILS,
+    CAMERA_RECONNECT_DELAY_SECONDS,
     VISION_EVERY_N_FRAMES,
     EVENT_END_MISSES,
     MODELS_DIR,
@@ -34,7 +37,8 @@ from vision.pipeline import VisionPipeline
 _state_lock = threading.Lock()
 
 door_locked: bool = True
-lock_until_ts: Optional[float] = None
+lock_until_ts: Optional[float] = None    # prey lock window
+unlock_until_ts: Optional[float] = None  # clean unlock window
 override_force_open: bool = OVERRIDE_DEFAULT_FORCE_OPEN
 
 last_event_nr: Optional[int] = None
@@ -79,7 +83,7 @@ def door_decision_cb(decision: str, score=None, event_nr=None):
     """
     decision: "prey" | "no_prey" | "dk"
     """
-    global lock_until_ts, last_event_nr, clean_hits_this_event, override_force_open
+    global lock_until_ts, unlock_until_ts, last_event_nr, clean_hits_this_event, override_force_open
 
     with _state_lock:
         logger.info(f"Vision decision: {decision} score={score} event={event_nr}")
@@ -110,6 +114,7 @@ def door_decision_cb(decision: str, score=None, event_nr=None):
 
         if decision == "prey":
             lock_until_ts = now + LOCK_DURATION_SECONDS
+            unlock_until_ts = None
             clean_hits_this_event = 0
             _apply_lock(f"prey_detected_lock_{LOCK_DURATION_SECONDS}s")
             return
@@ -118,29 +123,46 @@ def door_decision_cb(decision: str, score=None, event_nr=None):
             clean_hits_this_event += 1
             logger.info(f"Clean confirmations: {clean_hits_this_event}/{CLEAN_CONFIRMATIONS}")
             if clean_hits_this_event >= CLEAN_CONFIRMATIONS:
-                _apply_unlock("clean_confirmed")
+                # keep extending the window while the cat is still seen clean
+                unlock_until_ts = now + UNLOCK_DURATION_SECONDS
+                if door_locked:
+                    _apply_unlock("clean_confirmed")
             return
 
         # dk => keep previous state
         logger.info("DK decision: keeping previous door state.")
 
 
+def timer_tick(now: Optional[float] = None):
+    """Enforces window expiry even if no new vision decisions arrive.
+
+    Invariant: door is unlocked only during override or an active unlock window.
+    """
+    global lock_until_ts, unlock_until_ts, override_force_open
+
+    with _state_lock:
+        override_force_open = bool(getattr(override, "let_in_flag", False)) or OVERRIDE_DEFAULT_FORCE_OPEN
+
+        if override_force_open:
+            if door_locked:
+                _apply_unlock("override_force_open_tick")
+            return
+
+        if now is None:
+            now = time.time()
+
+        if lock_until_ts is not None and now >= lock_until_ts:
+            lock_until_ts = None
+            _apply_lock("prey_lock_expired_default_locked")
+        elif not door_locked and (unlock_until_ts is None or now >= unlock_until_ts):
+            # covers both: unlock window expired, and override just turned off
+            unlock_until_ts = None
+            _apply_lock("unlock_expired_default_locked")
+
+
 def timer_tick_forever(stop_event: threading.Event):
-    """Enforces prey lock expiry even if no new vision decisions arrive."""
-    global lock_until_ts, override_force_open
-
     while not stop_event.is_set():
-        with _state_lock:
-            override_force_open = bool(getattr(override, "let_in_flag", False)) or OVERRIDE_DEFAULT_FORCE_OPEN
-
-            if override_force_open:
-                if door_locked:
-                    _apply_unlock("override_force_open_tick")
-            else:
-                now = time.time()
-                if lock_until_ts is not None and now >= lock_until_ts:
-                    lock_until_ts = None
-                    _apply_lock("prey_lock_expired_default_locked")
+        timer_tick()
         time.sleep(0.5)
 
 
@@ -173,19 +195,28 @@ def run_vision_forever(stop_event: threading.Event):
 
     cap = _open_capture(CAMERA_SOURCE)
     if not cap.isOpened():
-        raise RuntimeError(f"Unable to open camera source: {CAMERA_SOURCE}")
+        logger.warning(f"Camera source not available at startup: {CAMERA_SOURCE}; will keep retrying.")
 
     frame_idx = 0
     event_nr = 0
     miss_streak = 0
     in_event = False
+    read_fails = 0
 
     while not stop_event.is_set():
         ok, frame = cap.read()
         if not ok or frame is None:
-            logger.warning("Camera read failed; retrying...")
-            time.sleep(0.1)
+            read_fails += 1
+            if read_fails >= CAMERA_MAX_READ_FAILS:
+                logger.warning(f"Camera read failed {read_fails}x; reconnecting to {CAMERA_SOURCE}...")
+                cap.release()
+                time.sleep(CAMERA_RECONNECT_DELAY_SECONDS)
+                cap = _open_capture(CAMERA_SOURCE)
+                read_fails = 0
+            else:
+                time.sleep(0.1)
             continue
+        read_fails = 0
 
         frame_idx += 1
         if frame_idx % VISION_EVERY_N_FRAMES != 0:

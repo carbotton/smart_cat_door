@@ -10,6 +10,7 @@ RELAY_PIN = 17  # BCM numbering
 # =========================
 LOCK_DURATION_SECONDS = 15 * 60      # prey -> lock for 15 minutes
 CLEAN_CONFIRMATIONS = 2              # no_prey must be confirmed twice (same event)
+UNLOCK_DURATION_SECONDS = 10         # clean unlock lasts this long, then back to locked
 
 # If True, door will be forced open at startup until you toggle it off
 OVERRIDE_DEFAULT_FORCE_OPEN = False
@@ -25,6 +26,10 @@ CAMERA_SOURCE = "rtsp://169.254.1.1:554/live/0/MAIN"
 
 # If using RTSP, sometimes OpenCV needs a smaller buffer to reduce latency
 CAP_PROP_BUFFERSIZE = 1
+
+# Reconnect to the camera after this many consecutive failed reads
+CAMERA_MAX_READ_FAILS = 25
+CAMERA_RECONNECT_DELAY_SECONDS = 5
 
 # Run cat detection / inference every N frames to reduce load
 VISION_EVERY_N_FRAMES = 3

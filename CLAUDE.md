@@ -53,12 +53,14 @@ models/
 
 ## Door state machine (`main.py`)
 
-- Default state at startup: **locked**
+- Default state: **locked**. Invariant: door is unlocked only during override or an active unlock window
 - `"prey"` → lock for `LOCK_DURATION_SECONDS` (default 15 min); reset clean counter
-- `"no_prey"` → increment clean counter; unlock after `CLEAN_CONFIRMATIONS` (default 2) in same event
+- `"no_prey"` → increment clean counter; after `CLEAN_CONFIRMATIONS` (default 2) in same event, unlock for `UNLOCK_DURATION_SECONDS` (default 10 s), window extended while the cat is still seen clean; re-locks when it expires
 - `"dk"` (don't know) → keep previous state
-- Override button toggles force-open; override wins over all vision decisions
-- Timer thread enforces lock expiry even when no new frames arrive
+- Override button toggles force-open; override wins over all vision decisions; toggling it off re-locks on the next timer tick
+- Timer thread (`timer_tick`) enforces both window expiries even when no new frames arrive
+- Camera: after `CAMERA_MAX_READ_FAILS` consecutive failed reads, the capture is released and reopened (`CAMERA_RECONNECT_DELAY_SECONDS` between attempts); startup with camera absent retries the same way
+- `test/test_door_state.py` — state machine checks, runs off-Pi (stubs RPi.GPIO)
 
 ## TF-OD frozen graph
 
