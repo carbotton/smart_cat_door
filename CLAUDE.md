@@ -84,6 +84,22 @@ TFOD_FROZEN_GRAPH = Path("/home/carbotton/models/research/object_detection/ssdli
 
 All Keras `.h5` models and Haar XMLs are in `models/` and are bundled.
 
+## Viewing the camera feed remotely
+
+The IP camera lives on a link-local Ethernet segment (`169.254.0.0/16`) wired only to the Pi's `eth0` — not reachable directly from another machine, even over VPN (link-local addresses aren't routable). To view it from another computer, tunnel through the Pi over SSH:
+
+```bash
+ssh -L 8554:169.254.1.1:554 carbotton@<pi-address> -N
+```
+
+Then, on the other machine, point any RTSP client at the forwarded local port:
+
+```bash
+vlc rtsp://localhost:8554/live/0/MAIN
+```
+
+`MAIN` = full-res stream, `SUB` = lower-res (what the vision pipeline itself consumes).
+
 ## Test scripts (`test/`)
 
 | Script | Purpose |

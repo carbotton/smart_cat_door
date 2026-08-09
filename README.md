@@ -18,3 +18,17 @@ graph TD
         I --> B
 ```
 
+## Viewing the camera feed remotely
+
+Camera is on a link-local network wired only to the Pi's `eth0` — not reachable from another machine directly, even over VPN. Tunnel through the Pi over SSH:
+
+```bash
+ssh -L 8554:169.254.1.1:554 carbotton@<pi-address> -N
+```
+
+Then, from the other machine:
+
+```bash
+vlc rtsp://localhost:8554/live/0/MAIN
+```
+
