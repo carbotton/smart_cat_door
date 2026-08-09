@@ -26,9 +26,9 @@ Camera is on a link-local network wired only to the Pi's `eth0` — not reachabl
 ssh -L 8554:169.254.1.1:554 carbotton@<pi-address> -N
 ```
 
-Then, from the other machine:
+Then, from the other machine — force TCP transport, since SSH `-L` only tunnels TCP and RTSP video normally goes over UDP (VLC's client falls back to UDP regardless, breaking the tunnel; `ffplay` respects the flag):
 
 ```bash
-vlc rtsp://localhost:8554/live/0/MAIN
+ffplay -rtsp_transport tcp rtsp://localhost:8554/live/0/MAIN
 ```
 

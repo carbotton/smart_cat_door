@@ -92,11 +92,13 @@ The IP camera lives on a link-local Ethernet segment (`169.254.0.0/16`) wired on
 ssh -L 8554:169.254.1.1:554 carbotton@<pi-address> -N
 ```
 
-Then, on the other machine, point any RTSP client at the forwarded local port:
+Then, on the other machine, point an RTSP client at the forwarded local port — force TCP transport, since SSH `-L` only tunnels TCP and RTSP normally sends video over UDP:
 
 ```bash
-vlc rtsp://localhost:8554/live/0/MAIN
+ffplay -rtsp_transport tcp rtsp://localhost:8554/live/0/MAIN
 ```
+
+(VLC's default RTSP client falls back to UDP for the video packets regardless of URL, which breaks over this tunnel — `ffplay` respects `-rtsp_transport tcp` directly.)
 
 `MAIN` = full-res stream, `SUB` = lower-res (what the vision pipeline itself consumes).
 
