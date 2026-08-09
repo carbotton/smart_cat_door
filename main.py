@@ -118,14 +118,14 @@ def setup_ethernet_link_local(
 
 def _apply_lock(reason: str):
     global door_locked
-    lock_door()
+    # lock_door()  # ponytail: view-mode, no door hardware attached
     door_locked = True
     logger.info(f"DOOR CLOSED — {reason}")
 
 
 def _apply_unlock(reason: str):
     global door_locked
-    unlock_door()
+    # unlock_door()  # ponytail: view-mode, no door hardware attached
     door_locked = False
     logger.info(f"DOOR OPENED — {reason}")
 
