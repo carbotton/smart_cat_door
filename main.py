@@ -346,6 +346,7 @@ def run_vision_forever(stop_event: threading.Event):
             in_event  = True
             cum.reset()
             logger.info(f">>> EVENT #{event_nr} START — cat detected")
+            _snapshot_and_notify_async(frame, "test")  # TEMP: camera-angle test, remove once camera is repositioned
 
         res = pipeline.analyze(frame, det.box, det.score)
 
