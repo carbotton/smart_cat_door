@@ -295,14 +295,17 @@ def run_vision_forever(stop_event: threading.Event):
 
     reader = _LatestFrameReader(CAMERA_SOURCE)
 
-    # Wait for the first frame before declaring the camera open
+    # Wait for the first frame before declaring the camera open. Retries
+    # forever (camera may power up slower than the Pi after a shared outage).
     first_seq = 0
-    for _ in range(30):
+    waited = 0
+    while True:
         frame, first_seq = reader.wait_for_frame(first_seq, timeout=1.0)
         if frame is not None:
             break
-    else:
-        raise RuntimeError(f"Unable to open camera source: {CAMERA_SOURCE}")
+        waited += 1
+        if waited % 30 == 0:
+            logger.warning(f"Still waiting for camera source: {CAMERA_SOURCE} ({waited}s)")
 
     logger.info(f"Camera opened: {CAMERA_SOURCE}")
     logger.info(f"Cummuli thresholds — no_prey: >{CUMULUS_NO_PREY_THRESHOLD:.2f}  prey: <{CUMULUS_PREY_THRESHOLD:.1f}  patience: {CUMULUS_PATIENCE} faces")
